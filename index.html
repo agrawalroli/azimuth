@@ -297,7 +297,7 @@ async function lookupFlight() {
 If you cannot find the flight, return {"found": false}.
 Return ONLY the JSON, no other text, no markdown.`;
 
-  try {
+try {
     const response = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -308,13 +308,18 @@ Return ONLY the JSON, no other text, no markdown.`;
         messages: [{ role: "user", content: prompt }]
       })
     });
+    
+    if (!response.ok) throw new Error("Worker responded with an HTTP error status");
+    
     const data = await response.json();
     const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('');
     const clean = text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
 
-    if (!parsed.found) {
-      setLookupMsg(`Could not find ${flightNum} on ${flightDate}. Try manual mode.`);
+    if (!parsed.found || !parsed.dep || !parsed.arr) {
+      setLookupMsg(`Could not find details for ${flightNum}. Dropping to manual mode setup...`);
+      // Fallback: prepopulate whatever input we can gather into manual mode tabs automatically
+      switchToManualFallback(flightNum);
       return;
     }
 
@@ -328,7 +333,9 @@ Return ONLY the JSON, no other text, no markdown.`;
     lookedUpData = parsed;
     setLookupMsg(`✓ ${parsed.dep} → ${parsed.arr} · ${parsed.duration_hours}h · departs ${parsed.dep_utc} UTC`);
   } catch(e) {
-    setLookupMsg('Lookup failed. Try manual mode or check your connection.');
+    console.error(e);
+    setLookupMsg('Lookup unavailable. Switched to manual mode configuration.');
+    switchToManualFallback(flightNum);
   }
 }
 
@@ -337,6 +344,18 @@ function setLookupMsg(msg, loading=false) {
   document.getElementById('spinner').style.display = loading ? 'block' : 'none';
 }
 
+function switchToManualFallback(flightNum) {
+  // Gracefully moves the interface over to manual inputs if API paths choke up
+  setMode('manual');
+  document.getElementById('error').textContent = `Note: Automatic data grab for ${flightNum} was skipped. please fill out route geometry manually below.`;
+  
+  // Try parsing out values if user entered something standard like LH400 to parse airline vs number context
+  const targetDate = document.getElementById('flightDate').value;
+  if(targetDate) {
+    document.getElementById('depdate').value = targetDate;
+  }
+}
+ 
 function toRad(d){return d*Math.PI/180;}
 function toDeg(r){return r*180/Math.PI;}
 
@@ -471,17 +490,34 @@ function calculate(){
     else{aSun++;segments.push({side:'A'});}
   }
 
-  const winner=aSun>=kSun?'A':'K';
-  const dist=haversine(ap1.lat,ap1.lng,ap2.lat,ap2.lng);
-  const aPct=Math.round(aSun/STEPS*100);
-  const kPct=Math.round(kSun/STEPS*100);
+  let winner = 'A';
+let resultTitle = '';
+let resultDesc = '';
 
-  document.getElementById('sideLetterBig').textContent=winner;
-  document.getElementById('resultTitle').textContent=`Sit on the ${winner} side`;
-  document.getElementById('resultDesc').textContent=
-    winner==='A'
-    ?`Left side of the plane (when facing forward). The sun will be on your side for ${aPct}% of the flight.`
-    :`Right side of the plane (when facing forward). The sun will be on your side for ${kPct}% of the flight.`;
+const aPct=Math.round(aSun/STEPS*100);
+const kPct=Math.round(kSun/STEPS*100);
+
+if (aSun === 0 && kSun === 0) {
+  winner = '—';
+  resultTitle = "Night Flight";
+  resultDesc = "Enjoy the views or get some sleep—it's dark on both sides of the aircraft!";
+} else if (aSun === kSun) {
+  winner = '½';
+  resultTitle = "Equally Sunny";
+  resultDesc = `The sun shifts across the journey. Left (A) has sun for ${aPct}%, Right (K) has sun for ${kPct}%. Either side is fine!`;
+} else {
+  winner = aSun > kSun ? 'A' : 'K';
+  resultTitle = `Sit on the ${winner} side`;
+  resultDesc = winner === 'A'
+    ? `Left side of the plane (facing forward). The sun will be on your side for ${aPct}% of the flight.`
+    : `Right side of the plane (facing forward). The sun will be on your side for ${kPct}% of the flight.`;
+}
+
+const dist=haversine(ap1.lat,ap1.lng,ap2.lat,ap2.lng);
+
+document.getElementById('sideLetterBig').textContent=winner;
+document.getElementById('resultTitle').textContent=resultTitle;
+document.getElementById('resultDesc').textContent=resultDesc;
 
   const tag = document.getElementById('flightTagDisplay');
   if (flightLabel) { tag.textContent = flightLabel; tag.style.display='inline-block'; }
